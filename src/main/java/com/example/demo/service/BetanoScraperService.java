@@ -81,52 +81,6 @@ public class BetanoScraperService {
                     route.resume();
                 });
 
-                // Set up response handling for intercepted requests
-                page.onResponse(response -> {
-                    String url = response.url();
-                    int status = response.status();
-                    String contentType = response.headers().get("content-type");
-                    String resourceType = response.request().resourceType();
-
-                    boolean matchesEndpoint = apiEndpoints.stream().anyMatch(url::contains);
-                    boolean isSuccessful = status >= 200 && status < 300;
-                    boolean isJson = contentType != null && contentType.toLowerCase().contains("application/json");
-                    boolean isApiCall = "xhr".equals(resourceType) || "fetch".equals(resourceType);
-
-                    if (matchesEndpoint && isSuccessful && isJson && isApiCall) {
-                        apiEndpointHit.set(true);
-                        log.debug("Processing response from: {}", url);
-                        try {
-                            String responseBody = response.text();
-                            JsonNode jsonNode = objectMapper.readTree(responseBody);
-
-                            // Only attempt to parse endpoints that expose known data
-                            // structures. Betano's betslip endpoint returns odds nested
-                            // under "bets"/"legs" keys, while the main betting APIs use
-                            // an "events" array. Anything else is logged for manual
-                            // inspection.
-                            if (jsonNode.has("events")) {
-                                List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
-                                events.addAll(parsedEvents);
-                                log.info("Parsed {} events from {}", parsedEvents.size(), url);
-                            } else if (jsonNode.has("bets") || jsonNode.has("legs")) {
-                                List<BettingEvent> parsedEvents = parseBetslipJson(jsonNode);
-                                events.addAll(parsedEvents);
-                                log.info("Parsed {} betslip events from {}", parsedEvents.size(), url);
-                            } else {
-                                log.debug("Skipping JSON without recognised betting data from {}", url);
-                            }
-                        } catch (Exception e) {
-                            // Avoid logging full stack traces for noisy responses
-                            log.warn("Error parsing response from {}: {}", url, e.getMessage());
-                        }
-                    } else {
-                        log.debug(
-                                "Skipping response from {} (status: {}, content-type: {}, type: {})",
-                                url, status, contentType, resourceType);
-                    }
-                });
-
                 // Navigate to Betano and handle cookie banner if present
                 log.info("Navigating to {}", matchUrl);
                 page.navigate(matchUrl);
@@ -144,8 +98,23 @@ public class BetanoScraperService {
 
                 page.waitForLoadState(LoadState.NETWORKIDLE);
 
-                // Add a delay to ensure all API requests are intercepted
-                page.waitForTimeout(5000);
+                // Click a market tab to trigger odds requests
+                try {
+                    page.click("[data-test-id='Soccer_Match_Result']");
+                    Response oddsResponse = page.waitForResponse(
+                            r -> {
+                                String url = r.url();
+                                return url.contains("bettingoffer") || url.contains("live-data");
+                            });
+                    String responseBody = oddsResponse.text();
+                    JsonNode jsonNode = objectMapper.readTree(responseBody);
+                    List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
+                    events.addAll(parsedEvents);
+                    apiEndpointHit.set(true);
+                    log.info("Parsed {} events from {}", parsedEvents.size(), oddsResponse.url());
+                } catch (Exception e) {
+                    log.warn("Error fetching odds data: {}", e.getMessage());
+                }
 
                 if (!apiEndpointHit.get()) {
                     log.warn("No betting API endpoints were called during navigation to {}", matchUrl);
