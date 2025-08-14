@@ -59,8 +59,8 @@ public class BetanoScraperService {
             try (BrowserContext context = createBrowserContext(browser)) {
                 Page page = context.newPage();
 
-                // Set up request interception for XHR/JSON API requests related to the match
-                String apiPattern = ".*api.*" + (matchId != null ? matchId : "") + ".*";
+                // Set up request interception for Betano's betting API endpoints
+                String apiPattern = ".*/api/betting/.*" + (matchId != null ? Pattern.quote(matchId) + ".*" : "");
                 page.route(Pattern.compile(apiPattern), route -> {
                     log.debug("Intercepted API request: {}", route.request().url());
                     route.resume();
