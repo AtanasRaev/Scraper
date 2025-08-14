@@ -59,12 +59,14 @@ public class BetanoScraperService {
             try (BrowserContext context = createBrowserContext(browser)) {
                 Page page = context.newPage();
 
-                // Set up request interception for Betano's betting API endpoints
-                // Betano's APIs can expose betting data under various paths such as
-                // "offer", "events" or generic "betting" endpoints. We intercept any
-                // request containing these keywords and optionally filter by matchId.
-                String apiPattern = ".*/(offer|events|betting)/.*" +
-                        (matchId != null ? Pattern.quote(matchId) + ".*" : "");
+                // Intercept all network requests during debugging. Previously the
+                // scraper filtered only specific betting endpoints ("offer",
+                // "events", "betting"), which made it easy to miss additional APIs
+                // such as "api/events", "live-data" or GraphQL endpoints. Using a
+                // catch-all pattern allows us to review every request and later narrow
+                // the filter once the real API paths are confirmed via browser
+                // inspection.
+                String apiPattern = ".*"; // capture all requests for investigation
                 page.route(Pattern.compile(apiPattern), route -> {
                     log.debug("Intercepted API request: {}", route.request().url());
                     route.resume();
@@ -86,9 +88,17 @@ public class BetanoScraperService {
                         try {
                             String responseBody = response.text();
                             JsonNode jsonNode = objectMapper.readTree(responseBody);
-                            List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
-                            events.addAll(parsedEvents);
-                            log.info("Parsed {} events from {}", parsedEvents.size(), url);
+
+                            // Only attempt to parse endpoints that expose an "events" array.
+                            // This avoids noisy responses from unrelated APIs while still
+                            // logging their presence for further manual inspection.
+                            if (jsonNode.has("events")) {
+                                List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
+                                events.addAll(parsedEvents);
+                                log.info("Parsed {} events from {}", parsedEvents.size(), url);
+                            } else {
+                                log.debug("Skipping JSON without events array from {}", url);
+                            }
                         } catch (Exception e) {
                             // Avoid logging full stack traces for noisy responses
                             log.warn("Error parsing response from {}: {}", url, e.getMessage());
