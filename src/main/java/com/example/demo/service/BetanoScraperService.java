@@ -73,32 +73,30 @@ public class BetanoScraperService {
                 // Set up response handling for intercepted requests
                 page.onResponse(response -> {
                     String url = response.url();
-                    if (matchId == null || url.contains(matchId)) {
-                        int status = response.status();
-                        String contentType = response.headers().get("content-type");
-                        String resourceType = response.request().resourceType();
+                    int status = response.status();
+                    String contentType = response.headers().get("content-type");
+                    String resourceType = response.request().resourceType();
 
-                        boolean isSuccessful = status >= 200 && status < 300;
-                        boolean isJson = contentType != null && contentType.toLowerCase().contains("application/json");
-                        boolean isApiCall = "xhr".equals(resourceType) || "fetch".equals(resourceType);
+                    boolean isSuccessful = status >= 200 && status < 300;
+                    boolean isJson = contentType != null && contentType.toLowerCase().contains("application/json");
+                    boolean isApiCall = "xhr".equals(resourceType) || "fetch".equals(resourceType);
 
-                        if (isSuccessful && isJson && isApiCall) {
-                            log.debug("Processing response from: {}", url);
-                            try {
-                                String responseBody = response.text();
-                                JsonNode jsonNode = objectMapper.readTree(responseBody);
-                                List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
-                                events.addAll(parsedEvents);
-                                log.info("Parsed {} events from {}", parsedEvents.size(), url);
-                            } catch (Exception e) {
-                                // Avoid logging full stack traces for noisy responses
-                                log.warn("Error parsing response from {}: {}", url, e.getMessage());
-                            }
-                        } else {
-                            log.debug(
-                                    "Skipping response from {} (status: {}, content-type: {}, type: {})",
-                                    url, status, contentType, resourceType);
+                    if (isSuccessful && isJson && isApiCall) {
+                        log.debug("Processing response from: {}", url);
+                        try {
+                            String responseBody = response.text();
+                            JsonNode jsonNode = objectMapper.readTree(responseBody);
+                            List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
+                            events.addAll(parsedEvents);
+                            log.info("Parsed {} events from {}", parsedEvents.size(), url);
+                        } catch (Exception e) {
+                            // Avoid logging full stack traces for noisy responses
+                            log.warn("Error parsing response from {}: {}", url, e.getMessage());
                         }
+                    } else {
+                        log.debug(
+                                "Skipping response from {} (status: {}, content-type: {}, type: {})",
+                                url, status, contentType, resourceType);
                     }
                 });
 
@@ -212,14 +210,16 @@ public class BetanoScraperService {
                 JsonNode eventsNode = jsonNode.get("events");
 
                 for (JsonNode eventNode : eventsNode) {
-                    String eventId = eventNode.path("id").asText();
-                    String urlSegment = eventNode.path("url").asText();
+                    // Use values inside the JSON to determine if this event matches the requested matchId
+                    String eventId = eventNode.path("id").asText(null);
+                    String urlSegment = eventNode.path("url").asText(null);
 
                     if (matchId != null && !matchId.isBlank()) {
-                        boolean matchesId = matchId.equals(eventId);
+                        boolean matchesId = eventId != null && matchId.equals(eventId);
                         boolean matchesUrl = urlSegment != null && urlSegment.contains(matchId);
                         if (!matchesId && !matchesUrl) {
-                            continue; // skip events that do not match the requested id
+                            // Skip events that do not correspond to the requested match
+                            continue;
                         }
                     }
 
