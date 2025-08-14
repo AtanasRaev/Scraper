@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -177,33 +178,35 @@ public class BetanoScraperService {
         List<BettingEvent> events = new ArrayList<>();
 
         try {
-            // This is a placeholder implementation
-            // The actual parsing logic will depend on the structure of Betano's API responses
-            // You'll need to adapt this based on the actual JSON structure
+            JsonNode eventsNode = jsonNode.path("data").path("events");
 
-            if (jsonNode.has("events") && jsonNode.get("events").isArray()) {
-                JsonNode eventsNode = jsonNode.get("events");
-
+            if (eventsNode.isArray()) {
                 for (JsonNode eventNode : eventsNode) {
+                    String eventId = eventNode.path("id").asText();
                     String matchName = eventNode.path("name").asText();
                     String startTimeStr = eventNode.path("startTime").asText();
                     LocalDateTime startTime = parseDateTime(startTimeStr);
 
                     List<BettingMarket> markets = new ArrayList<>();
+                    JsonNode marketsNode = eventNode.path("markets");
 
-                    if (eventNode.has("markets") && eventNode.get("markets").isArray()) {
-                        JsonNode marketsNode = eventNode.get("markets");
-
+                    if (marketsNode.isArray()) {
                         for (JsonNode marketNode : marketsNode) {
-                            String marketType = marketNode.path("type").asText();
+                            String marketType = marketNode.path("name").asText();
                             List<BettingSelection> selections = new ArrayList<>();
 
-                            if (marketNode.has("selections") && marketNode.get("selections").isArray()) {
-                                JsonNode selectionsNode = marketNode.get("selections");
+                            JsonNode selectionsNode = marketNode.path("selections");
+                            if (!selectionsNode.isArray()) {
+                                selectionsNode = marketNode.path("outcomes");
+                            }
 
+                            if (selectionsNode.isArray()) {
                                 for (JsonNode selectionNode : selectionsNode) {
                                     String selectionName = selectionNode.path("name").asText();
-                                    double odds = selectionNode.path("odds").asDouble();
+                                    double odds = selectionNode.path("price").asDouble();
+                                    if (odds == 0) {
+                                        odds = selectionNode.path("odds").asDouble();
+                                    }
 
                                     selections.add(BettingSelection.builder()
                                             .selectionName(selectionName)
@@ -220,6 +223,7 @@ public class BetanoScraperService {
                     }
 
                     events.add(BettingEvent.builder()
+                            .eventId(eventId)
                             .matchName(matchName)
                             .startTime(startTime)
                             .markets(markets)
@@ -238,9 +242,8 @@ public class BetanoScraperService {
      */
     private LocalDateTime parseDateTime(String dateTimeStr) {
         try {
-            // This is a placeholder implementation
-            // The actual parsing logic will depend on the format of Betano's date-time strings
-            return LocalDateTime.parse(dateTimeStr, DateTimeFormatter.ISO_DATE_TIME);
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX");
+            return OffsetDateTime.parse(dateTimeStr, formatter).toLocalDateTime();
         } catch (Exception e) {
             log.warn("Failed to parse date-time: {}", dateTimeStr);
             return LocalDateTime.now();

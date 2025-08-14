@@ -16,6 +16,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class BettingEvent {
+    private String eventId;
     private String matchName;
     private LocalDateTime startTime;
     private List<BettingMarket> markets;
