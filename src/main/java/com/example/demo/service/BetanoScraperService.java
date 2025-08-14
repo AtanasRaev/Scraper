@@ -24,6 +24,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
@@ -57,6 +59,22 @@ public class BetanoScraperService {
         // `/api/events/{id}` endpoint. When matchId already contains a path or slug,
         // it is used as-is.
         String matchUrl = buildMatchUrl(matchId);
+
+        // Attempt to resolve a numeric event identifier from the provided match
+        // argument or the resolved URL. This ID is required for Betano's odds
+        // endpoint.
+        String eventId = extractEventId(matchId);
+        if (eventId.isBlank()) {
+            eventId = extractEventId(matchUrl);
+        }
+
+        // If we successfully determined an event ID, call Betano's public odds
+        // API before launching the Playwright browser. The retrieved markets are
+        // merged with any data intercepted later via network listeners.
+        if (!eventId.isBlank()) {
+            List<BettingEvent> apiEvents = fetchEventsByEventId(eventId);
+            events.addAll(apiEvents);
+        }
 
         try (Playwright playwright = Playwright.create()) {
             Browser browser = launchBrowser(playwright);
@@ -299,6 +317,58 @@ public class BetanoScraperService {
         }
 
         return browser.newContext(contextOptions);
+    }
+
+    /**
+     * Attempts to derive the numeric event identifier from either a match
+     * identifier or a resolved URL. The event ID is typically the trailing
+     * numeric segment of the path.
+     */
+    String extractEventId(String input) {
+        if (input == null || input.isBlank()) {
+            return "";
+        }
+
+        String path = input;
+        try {
+            if (input.startsWith("http")) {
+                path = URI.create(input).getPath();
+            }
+        } catch (Exception e) {
+            log.warn("Invalid URL {}: {}", input, e.getMessage());
+        }
+
+        Pattern pattern = Pattern.compile("(\\d+)(?:[^\\d]*)$");
+        Matcher matcher = pattern.matcher(path);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return "";
+    }
+
+    /**
+     * Fetches odds data for the given event ID using Betano's public API and
+     * parses the response into betting events.
+     */
+    List<BettingEvent> fetchEventsByEventId(String eventId) {
+        try {
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(BETANO_URL + "/api/bettingoffer/event/events?eventIds=" + eventId))
+                    .header("accept", "application/json")
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                JsonNode node = objectMapper.readTree(response.body());
+                return parseEventsFromJson(node, eventId);
+            } else {
+                log.warn("Failed to fetch odds for event {} (status: {})", eventId, response.statusCode());
+            }
+        } catch (Exception e) {
+            log.warn("Error fetching odds for event {}: {}", eventId, e.getMessage());
+        }
+        return List.of();
     }
 
     /**
