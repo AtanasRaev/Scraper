@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Predicate;
 
 @Service
 @Slf4j
@@ -119,11 +120,11 @@ public class BetanoScraperService {
                 // Click a market tab to trigger odds requests
                 try {
                     page.click("[data-test-id='Soccer_Match_Result']");
-                    Response oddsResponse = page.waitForResponse(
-                            r -> {
-                                String url = r.url();
-                                return url.contains("bettingoffer") || url.contains("live-data");
-                            });
+                    Predicate<Response> oddsPredicate = response -> {
+                        String url = response.url();
+                        return url.contains("bettingoffer") || url.contains("live-data");
+                    };
+                    Response oddsResponse = page.waitForResponse(oddsPredicate);
                     String responseBody = oddsResponse.text();
                     JsonNode jsonNode = objectMapper.readTree(responseBody);
                     List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
