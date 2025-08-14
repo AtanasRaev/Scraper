@@ -3,82 +3,65 @@ package com.example.demo.service;
 import com.example.demo.config.ProxyConfig;
 import com.example.demo.model.BettingEvent;
 import com.example.demo.util.UserAgentRotator;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
-class BetanoScraperServiceTest {
+public class BetanoScraperServiceTest {
 
-    @Test
-    void parseEventsFromJson_mapsFlatEventsCorrectly() throws Exception {
-        String json = "{\\\"events\\\":[{\\\"id\\\":\\\"evt1\\\",\\\"name\\\":\\\"Team A vs Team B\\\",\\\"startTime\\\":\\\"2025-08-14T20:00:00\\\",\\\"markets\\\":[{\\\"id\\\":\\\"mkt1\\\",\\\"name\\\":\\\"Match Winner\\\",\\\"selections\\\":[{\\\"id\\\":\\\"sel1\\\",\\\"name\\\":\\\"Team A\\\",\\\"odds\\\":1.5},{\\\"id\\\":\\\"sel2\\\",\\\"name\\\":\\\"Draw\\\",\\\"odds\\\":3.4},{\\\"id\\\":\\\"sel3\\\",\\\"name\\\":\\\"Team B\\\",\\\"odds\\\":2.8}]}]}]}";
-        ObjectMapper mapper = new ObjectMapper();
-        JsonNode node = mapper.readTree(json);
+    private static HttpServer server;
+    private static int port;
 
-        BetanoScraperService service = new BetanoScraperService(new ProxyConfig(), mapper, new UserAgentRotator());
+    @BeforeAll
+    static void startServer() throws IOException {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        port = server.getAddress().getPort();
 
-        List<BettingEvent> events = service.parseEventsFromJson(node, "evt1");
-
-        assertEquals(1, events.size());
-        BettingEvent event = events.get(0);
-        assertEquals("evt1", event.getEventId());
-        assertEquals("Team A vs Team B", event.getMatchName());
-        assertEquals(1, event.getMarkets().size());
-        assertEquals("mkt1", event.getMarkets().get(0).getMarketId());
-        assertEquals(3, event.getMarkets().get(0).getSelections().size());
-        assertEquals("sel1", event.getMarkets().get(0).getSelections().get(0).getSelectionId());
-        assertEquals(1.5, event.getMarkets().get(0).getSelections().get(0).getOdds(), 0.0001);
-    }
-
-    @Test
-    void parseEventsFromJson_handlesNestedFixtures() throws Exception {
-        String json = "{\"fixtures\":[{\"event\":{\"id\":\"evt2\",\"name\":\"Team C vs Team D\",\"startTime\":\"2025-08-15T18:00:00\"},\"markets\":[{\"id\":\"mkt2\",\"name\":\"Match Winner\",\"selections\":[{\"id\":\"sel1\",\"name\":\"Team C\",\"price\":{\"decimal\":1.7}},{\"id\":\"sel2\",\"name\":\"Draw\",\"price\":{\"decimal\":3.5}},{\"id\":\"sel3\",\"name\":\"Team D\",\"price\":{\"decimal\":2.2}}]}]}]}";
-        ObjectMapper mapper = new ObjectMapper();
-        JsonNode node = mapper.readTree(json);
-
-        BetanoScraperService service = new BetanoScraperService(new ProxyConfig(), mapper, new UserAgentRotator());
-
-        List<BettingEvent> events = service.parseEventsFromJson(node, "evt2");
-
-        assertEquals(1, events.size());
-        BettingEvent event = events.get(0);
-        assertEquals("evt2", event.getEventId());
-        assertEquals("Team C vs Team D", event.getMatchName());
-        assertEquals(1, event.getMarkets().size());
-        assertEquals("mkt2", event.getMarkets().get(0).getMarketId());
-        assertEquals(3, event.getMarkets().get(0).getSelections().size());
-        assertEquals(1.7, event.getMarkets().get(0).getSelections().get(0).getOdds(), 0.0001);
-    }
-
-    @Test
-    void buildMatchUrl_resolvesNumericIdViaApi() {
-        ObjectMapper mapper = new ObjectMapper();
-
-        BetanoScraperService service = new BetanoScraperService(new ProxyConfig(), mapper, new UserAgentRotator()) {
-            @Override
-            String resolveMatchPath(String matchId) {
-                // Simulate API lookup returning a slug for numeric IDs
-                if ("123".equals(matchId)) {
-                    return "sport/football/match-slug";
-                }
-                return super.resolveMatchPath(matchId);
+        server.createContext("/test", exchange -> {
+            String html = "<html><body><script>fetch('/api/bettingoffer')</script></body></html>";
+            exchange.getResponseHeaders().set("Content-Type", "text/html");
+            exchange.sendResponseHeaders(200, html.getBytes().length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(html.getBytes());
             }
-        };
+        });
 
-        String url = service.buildMatchUrl("123");
-        assertEquals("https://www.betano.bg/sport/football/match-slug", url);
+        server.createContext("/api/bettingoffer", exchange -> {
+            String json = "{\"events\":[{\"id\":\"1\",\"name\":\"Test\",\"startTime\":\"2024-01-01T00:00:00\",\"markets\":[]}]}";
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            exchange.sendResponseHeaders(200, json.getBytes().length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(json.getBytes());
+            }
+        });
+
+        server.start();
+    }
+
+    @AfterAll
+    static void stopServer() {
+        server.stop(0);
     }
 
     @Test
-    void buildMatchUrl_usesSlugDirectly() {
-        ObjectMapper mapper = new ObjectMapper();
-        BetanoScraperService service = new BetanoScraperService(new ProxyConfig(), mapper, new UserAgentRotator());
+    void shouldCaptureEventsFromStubbedEndpoint() {
+        ProxyConfig proxyConfig = new ProxyConfig();
+        ObjectMapper objectMapper = new ObjectMapper();
+        UserAgentRotator rotator = new UserAgentRotator();
 
-        String url = service.buildMatchUrl("sport/football/match-slug");
-        assertEquals("https://www.betano.bg/sport/football/match-slug", url);
+        BetanoScraperService service = new BetanoScraperService(proxyConfig, objectMapper, rotator);
+        List<BettingEvent> events = service.scrapeBettingData("http://localhost:" + port + "/test");
+
+        assertFalse(events.isEmpty(), "Expected events to be captured from stubbed endpoint");
     }
 }

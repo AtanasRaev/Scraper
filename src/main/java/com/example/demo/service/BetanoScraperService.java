@@ -24,7 +24,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Pattern;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 @Slf4j
@@ -64,16 +64,20 @@ public class BetanoScraperService {
             try (BrowserContext context = createBrowserContext(browser)) {
                 Page page = context.newPage();
 
-                // Intercept all network requests during debugging. Previously the
-                // scraper filtered only specific betting endpoints ("offer",
-                // "events", "betting"), which made it easy to miss additional APIs
-                // such as "api/events", "live-data" or GraphQL endpoints. Using a
-                // catch-all pattern allows us to review every request and later narrow
-                // the filter once the real API paths are confirmed via browser
-                // inspection.
-                String apiPattern = ".*"; // capture all requests for investigation
-                page.route(Pattern.compile(apiPattern), route -> {
-                    log.debug("Intercepted API request: {}", route.request().url());
+                // Betano exposes odds data through a handful of API endpoints that
+                // were identified via the browser's developer tools. Instead of
+                // capturing every single request with a catch-all regex, the scraper
+                // now watches only these specific paths. This keeps the logs focused
+                // and avoids parsing irrelevant traffic.
+                List<String> apiEndpoints = List.of("bettingoffer", "events", "live-data");
+                AtomicBoolean apiEndpointHit = new AtomicBoolean(false);
+
+                page.route("**/*", route -> {
+                    String url = route.request().url();
+                    if (apiEndpoints.stream().anyMatch(url::contains)) {
+                        apiEndpointHit.set(true);
+                        log.debug("Intercepted API request: {}", url);
+                    }
                     route.resume();
                 });
 
@@ -84,11 +88,13 @@ public class BetanoScraperService {
                     String contentType = response.headers().get("content-type");
                     String resourceType = response.request().resourceType();
 
+                    boolean matchesEndpoint = apiEndpoints.stream().anyMatch(url::contains);
                     boolean isSuccessful = status >= 200 && status < 300;
                     boolean isJson = contentType != null && contentType.toLowerCase().contains("application/json");
                     boolean isApiCall = "xhr".equals(resourceType) || "fetch".equals(resourceType);
 
-                    if (isSuccessful && isJson && isApiCall) {
+                    if (matchesEndpoint && isSuccessful && isJson && isApiCall) {
+                        apiEndpointHit.set(true);
                         log.debug("Processing response from: {}", url);
                         try {
                             String responseBody = response.text();
@@ -134,6 +140,10 @@ public class BetanoScraperService {
 
                 // Add a delay to ensure all API requests are intercepted
                 page.waitForTimeout(5000);
+
+                if (!apiEndpointHit.get()) {
+                    log.warn("No betting API endpoints were called during navigation to {}", matchUrl);
+                }
 
                 log.info("Scraping completed successfully. Total events captured: {}", events.size());
             } catch (Exception e) {
