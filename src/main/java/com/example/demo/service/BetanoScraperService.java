@@ -60,7 +60,11 @@ public class BetanoScraperService {
                 Page page = context.newPage();
 
                 // Set up request interception for Betano's betting API endpoints
-                String apiPattern = ".*/api/betting/.*" + (matchId != null ? Pattern.quote(matchId) + ".*" : "");
+                // Betano's APIs can expose betting data under various paths such as
+                // "offer", "events" or generic "betting" endpoints. We intercept any
+                // request containing these keywords and optionally filter by matchId.
+                String apiPattern = ".*/(offer|events|betting)/.*" +
+                        (matchId != null ? Pattern.quote(matchId) + ".*" : "");
                 page.route(Pattern.compile(apiPattern), route -> {
                     log.debug("Intercepted API request: {}", route.request().url());
                     route.resume();
@@ -85,6 +89,7 @@ public class BetanoScraperService {
                                 JsonNode jsonNode = objectMapper.readTree(responseBody);
                                 List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
                                 events.addAll(parsedEvents);
+                                log.info("Parsed {} events from {}", parsedEvents.size(), url);
                             } catch (Exception e) {
                                 // Avoid logging full stack traces for noisy responses
                                 log.warn("Error parsing response from {}: {}", url, e.getMessage());
@@ -105,7 +110,7 @@ public class BetanoScraperService {
                 // Add a delay to ensure all API requests are intercepted
                 page.waitForTimeout(5000);
 
-                log.info("Scraping completed successfully");
+                log.info("Scraping completed successfully. Total events captured: {}", events.size());
             } catch (Exception e) {
                 log.error("Error during scraping: {}", e.getMessage(), e);
             }
@@ -195,25 +200,23 @@ public class BetanoScraperService {
     }
 
     /**
-     * Parses betting events from JSON response and optionally filters by matchId
+     * Parses betting events from JSON response and optionally filters by matchId.
+     * The parsing logic maps Betano's API fields (event/market/selection IDs,
+     * names and odds) to the domain models.
      */
-    private List<BettingEvent> parseEventsFromJson(JsonNode jsonNode, String matchId) {
+    List<BettingEvent> parseEventsFromJson(JsonNode jsonNode, String matchId) {
         List<BettingEvent> events = new ArrayList<>();
 
         try {
-            // This is a placeholder implementation
-            // The actual parsing logic will depend on the structure of Betano's API responses
-            // You'll need to adapt this based on the actual JSON structure
-
             if (jsonNode.has("events") && jsonNode.get("events").isArray()) {
                 JsonNode eventsNode = jsonNode.get("events");
 
                 for (JsonNode eventNode : eventsNode) {
-                    String id = eventNode.path("id").asText();
+                    String eventId = eventNode.path("id").asText();
                     String urlSegment = eventNode.path("url").asText();
 
                     if (matchId != null && !matchId.isBlank()) {
-                        boolean matchesId = matchId.equals(id);
+                        boolean matchesId = matchId.equals(eventId);
                         boolean matchesUrl = urlSegment != null && urlSegment.contains(matchId);
                         if (!matchesId && !matchesUrl) {
                             continue; // skip events that do not match the requested id
@@ -230,17 +233,20 @@ public class BetanoScraperService {
                         JsonNode marketsNode = eventNode.get("markets");
 
                         for (JsonNode marketNode : marketsNode) {
-                            String marketType = marketNode.path("type").asText();
+                            String marketId = marketNode.path("id").asText();
+                            String marketName = marketNode.path("name").asText();
                             List<BettingSelection> selections = new ArrayList<>();
 
                             if (marketNode.has("selections") && marketNode.get("selections").isArray()) {
                                 JsonNode selectionsNode = marketNode.get("selections");
 
                                 for (JsonNode selectionNode : selectionsNode) {
+                                    String selectionId = selectionNode.path("id").asText();
                                     String selectionName = selectionNode.path("name").asText();
                                     double odds = selectionNode.path("odds").asDouble();
 
                                     selections.add(BettingSelection.builder()
+                                            .selectionId(selectionId)
                                             .selectionName(selectionName)
                                             .odds(odds)
                                             .build());
@@ -248,13 +254,15 @@ public class BetanoScraperService {
                             }
 
                             markets.add(BettingMarket.builder()
-                                    .marketType(marketType)
+                                    .marketId(marketId)
+                                    .marketType(marketName)
                                     .selections(selections)
                                     .build());
                         }
                     }
 
                     events.add(BettingEvent.builder()
+                            .eventId(eventId)
                             .matchName(matchName)
                             .startTime(startTime)
                             .markets(markets)
@@ -265,6 +273,7 @@ public class BetanoScraperService {
             log.error("Error parsing JSON response: {}", e.getMessage(), e);
         }
 
+        log.info("Parsed {} events from JSON response", events.size());
         return events;
     }
 

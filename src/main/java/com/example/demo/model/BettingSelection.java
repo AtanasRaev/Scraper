@@ -13,6 +13,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class BettingSelection {
+    private String selectionId;
     private String selectionName;
     private double odds;
 }
