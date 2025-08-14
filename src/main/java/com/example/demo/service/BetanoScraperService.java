@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.Proxy;
+import com.microsoft.playwright.options.WaitForSelectorState;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,7 +19,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
 @Service
@@ -100,9 +100,21 @@ public class BetanoScraperService {
                     }
                 });
 
-                // Navigate to Betano and wait for the page to load
+                // Navigate to Betano and handle cookie banner if present
                 log.info("Navigating to {}", matchUrl);
                 page.navigate(matchUrl);
+
+                String acceptButtonSelector = "button:has-text(\"Accept\")";
+                try {
+                    page.waitForSelector(acceptButtonSelector, new Page.WaitForSelectorOptions().setTimeout(5000));
+                    page.click(acceptButtonSelector);
+                    page.waitForSelector(acceptButtonSelector,
+                            new Page.WaitForSelectorOptions().setState(WaitForSelectorState.DETACHED));
+                    log.debug("Cookie banner accepted");
+                } catch (TimeoutError e) {
+                    log.debug("Cookie banner not found or already dismissed");
+                }
+
                 page.waitForLoadState(LoadState.NETWORKIDLE);
 
                 // Add a delay to ensure all API requests are intercepted
