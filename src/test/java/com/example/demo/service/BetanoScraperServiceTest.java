@@ -33,4 +33,32 @@ class BetanoScraperServiceTest {
         assertEquals("sel1", event.getMarkets().get(0).getSelections().get(0).getSelectionId());
         assertEquals(1.5, event.getMarkets().get(0).getSelections().get(0).getOdds(), 0.0001);
     }
+
+    @Test
+    void buildMatchUrl_resolvesNumericIdViaApi() {
+        ObjectMapper mapper = new ObjectMapper();
+
+        BetanoScraperService service = new BetanoScraperService(new ProxyConfig(), mapper, new UserAgentRotator()) {
+            @Override
+            String resolveMatchPath(String matchId) {
+                // Simulate API lookup returning a slug for numeric IDs
+                if ("123".equals(matchId)) {
+                    return "sport/football/match-slug";
+                }
+                return super.resolveMatchPath(matchId);
+            }
+        };
+
+        String url = service.buildMatchUrl("123");
+        assertEquals("https://www.betano.bg/sport/football/match-slug", url);
+    }
+
+    @Test
+    void buildMatchUrl_usesSlugDirectly() {
+        ObjectMapper mapper = new ObjectMapper();
+        BetanoScraperService service = new BetanoScraperService(new ProxyConfig(), mapper, new UserAgentRotator());
+
+        String url = service.buildMatchUrl("sport/football/match-slug");
+        assertEquals("https://www.betano.bg/sport/football/match-slug", url);
+    }
 }
