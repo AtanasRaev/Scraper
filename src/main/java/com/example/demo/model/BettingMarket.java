@@ -15,6 +15,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class BettingMarket {
+    private String marketId;
     private String marketType;
     private List<BettingSelection> selections;
 }
