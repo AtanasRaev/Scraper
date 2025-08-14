@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -27,9 +28,9 @@ public class BetanoScraperController {
      * @return List of betting events with markets and selections
      */
     @GetMapping("/betano")
-    public ResponseEntity<List<BettingEvent>> scrapeBetano() {
-        log.info("Received request to scrape Betano");
-        List<BettingEvent> events = scraperService.scrapeBettingData();
+    public ResponseEntity<List<BettingEvent>> scrapeBetano(@RequestParam("matchId") String matchId) {
+        log.info("Received request to scrape Betano for match {}", matchId);
+        List<BettingEvent> events = scraperService.scrapeBettingData(matchId);
         log.info("Scraping completed, returning {} events", events.size());
         return ResponseEntity.ok(events);
     }

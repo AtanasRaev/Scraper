@@ -38,12 +38,20 @@ public class BetanoScraperService {
     private boolean tryWithoutProxy = false;
 
     /**
-     * Scrapes betting data from Betano.bg
+     * Scrapes betting data from Betano.bg for a specific match
+     *
+     * @param matchId identifier or URL segment for the match
      * @return List of betting events with markets and selections
      */
-    public List<BettingEvent> scrapeBettingData() {
-        log.info("Starting Betano scraping process");
+    public List<BettingEvent> scrapeBettingData(String matchId) {
+        log.info("Starting Betano scraping process for match: {}", matchId);
         List<BettingEvent> events = new ArrayList<>();
+
+        // Build a match specific URL if an identifier is provided
+        String matchUrl = BETANO_URL;
+        if (matchId != null && !matchId.isBlank()) {
+            matchUrl = BETANO_URL + "/" + matchId;
+        }
 
         try (Playwright playwright = Playwright.create()) {
             Browser browser = launchBrowser(playwright);
@@ -51,8 +59,9 @@ public class BetanoScraperService {
             try (BrowserContext context = createBrowserContext(browser)) {
                 Page page = context.newPage();
 
-                // Set up request interception for XHR/JSON API requests
-                page.route(Pattern.compile(".*api.*odds.*"), route -> {
+                // Set up request interception for XHR/JSON API requests related to the match
+                String apiPattern = ".*api.*" + (matchId != null ? matchId : "") + ".*";
+                page.route(Pattern.compile(apiPattern), route -> {
                     log.debug("Intercepted API request: {}", route.request().url());
                     route.resume();
                 });
@@ -60,12 +69,12 @@ public class BetanoScraperService {
                 // Set up response handling for intercepted requests
                 page.onResponse(response -> {
                     String url = response.url();
-                    if (url.contains("api") && url.contains("odds")) {
+                    if (matchId == null || url.contains(matchId)) {
                         try {
                             log.debug("Processing response from: {}", url);
                             String responseBody = response.text();
                             JsonNode jsonNode = objectMapper.readTree(responseBody);
-                            List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode);
+                            List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
                             events.addAll(parsedEvents);
                         } catch (Exception e) {
                             log.error("Error processing response: {}", e.getMessage(), e);
@@ -74,8 +83,8 @@ public class BetanoScraperService {
                 });
 
                 // Navigate to Betano and wait for the page to load
-                log.info("Navigating to Betano.bg");
-                page.navigate(BETANO_URL);
+                log.info("Navigating to {}", matchUrl);
+                page.navigate(matchUrl);
                 page.waitForLoadState(LoadState.NETWORKIDLE);
 
                 // Add a delay to ensure all API requests are intercepted
@@ -171,9 +180,9 @@ public class BetanoScraperService {
     }
 
     /**
-     * Parses betting events from JSON response
+     * Parses betting events from JSON response and optionally filters by matchId
      */
-    private List<BettingEvent> parseEventsFromJson(JsonNode jsonNode) {
+    private List<BettingEvent> parseEventsFromJson(JsonNode jsonNode, String matchId) {
         List<BettingEvent> events = new ArrayList<>();
 
         try {
@@ -185,6 +194,17 @@ public class BetanoScraperService {
                 JsonNode eventsNode = jsonNode.get("events");
 
                 for (JsonNode eventNode : eventsNode) {
+                    String id = eventNode.path("id").asText();
+                    String urlSegment = eventNode.path("url").asText();
+
+                    if (matchId != null && !matchId.isBlank()) {
+                        boolean matchesId = matchId.equals(id);
+                        boolean matchesUrl = urlSegment != null && urlSegment.contains(matchId);
+                        if (!matchesId && !matchesUrl) {
+                            continue; // skip events that do not match the requested id
+                        }
+                    }
+
                     String matchName = eventNode.path("name").asText();
                     String startTimeStr = eventNode.path("startTime").asText();
                     LocalDateTime startTime = parseDateTime(startTimeStr);
