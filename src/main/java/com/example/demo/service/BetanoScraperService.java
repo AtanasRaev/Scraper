@@ -15,6 +15,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -47,11 +51,11 @@ public class BetanoScraperService {
         log.info("Starting Betano scraping process for match: {}", matchId);
         List<BettingEvent> events = new ArrayList<>();
 
-        // Build a match specific URL if an identifier is provided
-        String matchUrl = BETANO_URL;
-        if (matchId != null && !matchId.isBlank()) {
-            matchUrl = BETANO_URL + "/" + matchId;
-        }
+        // Determine the final URL for the match. If matchId is a numeric value the
+        // scraper first resolves the corresponding slug via Betano's known
+        // `/api/events/{id}` endpoint. When matchId already contains a path or slug,
+        // it is used as-is.
+        String matchUrl = buildMatchUrl(matchId);
 
         try (Playwright playwright = Playwright.create()) {
             Browser browser = launchBrowser(playwright);
@@ -137,6 +141,67 @@ public class BetanoScraperService {
         }
 
         return events;
+    }
+
+    /**
+     * Builds the final URL that Playwright should navigate to. If the provided
+     * match identifier is numeric, Betano's event API is queried to resolve the
+     * slug/path used for the web page. If the identifier already represents a
+     * path or slug, it is returned unchanged.
+     */
+    String buildMatchUrl(String matchId) {
+        String path = resolveMatchPath(matchId);
+
+        String url = BETANO_URL;
+        if (path != null && !path.isBlank()) {
+            if (path.startsWith("http")) {
+                url = path;
+            } else {
+                url = BETANO_URL + (path.startsWith("/") ? path : "/" + path);
+            }
+        }
+
+        return url;
+    }
+
+    /**
+     * Resolves a numeric match identifier to the corresponding slug by calling
+     * Betano's `/api/events/{id}` endpoint. If the identifier already contains a
+     * path/slug or the lookup fails, the original value is returned.
+     */
+    String resolveMatchPath(String matchId) {
+        if (matchId == null || matchId.isBlank()) {
+            return "";
+        }
+
+        // Only perform a lookup when the identifier is purely numeric
+        if (matchId.matches("\\d+")) {
+            try {
+                HttpClient client = HttpClient.newHttpClient();
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(BETANO_URL + "/api/events/" + matchId))
+                        .header("accept", "application/json")
+                        .build();
+
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    JsonNode node = objectMapper.readTree(response.body());
+                    String slug = node.path("slug").asText(null);
+                    if (slug == null || slug.isBlank()) {
+                        slug = node.path("url").asText(null);
+                    }
+
+                    if (slug != null && !slug.isBlank()) {
+                        return slug.startsWith("/") ? slug.substring(1) : slug;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Failed to resolve slug for match {}: {}", matchId, e.getMessage());
+            }
+        }
+
+        // Either the matchId already contained a path or the lookup failed.
+        return matchId;
     }
 
     /**
