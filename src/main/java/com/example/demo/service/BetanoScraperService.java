@@ -69,7 +69,7 @@ public class BetanoScraperService {
                 // capturing every single request with a catch-all regex, the scraper
                 // now watches only these specific paths. This keeps the logs focused
                 // and avoids parsing irrelevant traffic.
-                List<String> apiEndpoints = List.of("bettingoffer", "events", "live-data");
+                List<String> apiEndpoints = List.of("bettingoffer", "events", "live-data", "betslip");
                 AtomicBoolean apiEndpointHit = new AtomicBoolean(false);
 
                 page.route("**/*", route -> {
@@ -100,15 +100,21 @@ public class BetanoScraperService {
                             String responseBody = response.text();
                             JsonNode jsonNode = objectMapper.readTree(responseBody);
 
-                            // Only attempt to parse endpoints that expose an "events" array.
-                            // This avoids noisy responses from unrelated APIs while still
-                            // logging their presence for further manual inspection.
+                            // Only attempt to parse endpoints that expose known data
+                            // structures. Betano's betslip endpoint returns odds nested
+                            // under "bets"/"legs" keys, while the main betting APIs use
+                            // an "events" array. Anything else is logged for manual
+                            // inspection.
                             if (jsonNode.has("events")) {
                                 List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
                                 events.addAll(parsedEvents);
                                 log.info("Parsed {} events from {}", parsedEvents.size(), url);
+                            } else if (jsonNode.has("bets") || jsonNode.has("legs")) {
+                                List<BettingEvent> parsedEvents = parseBetslipJson(jsonNode);
+                                events.addAll(parsedEvents);
+                                log.info("Parsed {} betslip events from {}", parsedEvents.size(), url);
                             } else {
-                                log.debug("Skipping JSON without events array from {}", url);
+                                log.debug("Skipping JSON without recognised betting data from {}", url);
                             }
                         } catch (Exception e) {
                             // Avoid logging full stack traces for noisy responses
@@ -293,6 +299,95 @@ public class BetanoScraperService {
         }
 
         return browser.newContext(contextOptions);
+    }
+
+    /**
+     * Parses betslip responses where odds are nested under "bets"/"legs".
+     * Each leg represents a single selection for an event.
+     */
+    List<BettingEvent> parseBetslipJson(JsonNode jsonNode) {
+        List<BettingEvent> events = new ArrayList<>();
+        try {
+            List<JsonNode> legs = new ArrayList<>();
+            if (jsonNode.has("bets") && jsonNode.get("bets").isArray()) {
+                for (JsonNode bet : jsonNode.get("bets")) {
+                    JsonNode legsNode = bet.path("legs");
+                    if (legsNode.isArray()) {
+                        legsNode.forEach(legs::add);
+                    }
+                }
+            } else if (jsonNode.has("legs") && jsonNode.get("legs").isArray()) {
+                jsonNode.get("legs").forEach(legs::add);
+            }
+
+            for (JsonNode leg : legs) {
+                JsonNode eventNode = leg.path("event");
+                String eventId = eventNode.path("id").asText(null);
+                String matchName = eventNode.path("name").asText();
+                LocalDateTime startTime = parseDateTime(eventNode.path("startTime").asText());
+
+                JsonNode marketNode = leg.has("market") ? leg.get("market") : leg;
+                String marketId = marketNode.path("id").asText();
+                String marketName = marketNode.path("name").asText();
+
+                List<BettingSelection> selections = new ArrayList<>();
+                JsonNode selectionNode = leg.has("selection") ? leg.get("selection")
+                        : marketNode.has("selection") ? marketNode.get("selection")
+                        : marketNode.path("selections");
+                if (selectionNode != null && !selectionNode.isMissingNode()) {
+                    if (selectionNode.isArray()) {
+                        for (JsonNode sn : selectionNode) {
+                            selections.add(parseSelectionNode(sn));
+                        }
+                    } else {
+                        selections.add(parseSelectionNode(selectionNode));
+                    }
+                }
+
+                BettingMarket market = BettingMarket.builder()
+                        .marketId(marketId)
+                        .marketType(marketName)
+                        .selections(selections)
+                        .build();
+
+                events.add(BettingEvent.builder()
+                        .eventId(eventId)
+                        .matchName(matchName)
+                        .startTime(startTime)
+                        .markets(List.of(market))
+                        .build());
+            }
+        } catch (Exception e) {
+            log.error("Error parsing betslip JSON response: {}", e.getMessage(), e);
+        }
+        return events;
+    }
+
+    private BettingSelection parseSelectionNode(JsonNode selectionNode) {
+        String selectionId = selectionNode.path("id").asText();
+        String selectionName = selectionNode.path("name").asText();
+        double odds = 0.0;
+        if (selectionNode.has("odds")) {
+            JsonNode oddsNode = selectionNode.get("odds");
+            if (oddsNode.isNumber()) {
+                odds = oddsNode.asDouble();
+            } else if (oddsNode.has("decimal")) {
+                odds = oddsNode.get("decimal").asDouble();
+            }
+        } else if (selectionNode.has("price")) {
+            JsonNode priceNode = selectionNode.get("price");
+            if (priceNode.isNumber()) {
+                odds = priceNode.asDouble();
+            } else if (priceNode.has("decimal")) {
+                odds = priceNode.get("decimal").asDouble();
+            }
+        }
+
+        return BettingSelection.builder()
+                .selectionId(selectionId)
+                .selectionName(selectionName)
+                .odds(odds)
+                .build();
     }
 
     /**
