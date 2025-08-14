@@ -33,6 +33,9 @@ public class BetanoScraperScheduler {
     
     @Value("${scraper.output.directory:./scraper-output}")
     private String outputDirectory;
+
+    @Value("${scraper.matchId:}")
+    private String matchId;
     
     /**
      * Runs the scraper every 45 seconds (configurable)
@@ -43,7 +46,7 @@ public class BetanoScraperScheduler {
         log.info("Starting scheduled scraping task");
         
         try {
-            List<BettingEvent> events = scraperService.scrapeBettingData();
+            List<BettingEvent> events = scraperService.scrapeBettingData(matchId);
             log.info("Scheduled scraping completed, found {} events", events.size());
             
             if (outputEnabled && !events.isEmpty()) {
