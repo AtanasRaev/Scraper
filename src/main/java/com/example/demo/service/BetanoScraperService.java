@@ -70,14 +70,29 @@ public class BetanoScraperService {
                 page.onResponse(response -> {
                     String url = response.url();
                     if (matchId == null || url.contains(matchId)) {
-                        try {
+                        int status = response.status();
+                        String contentType = response.headers().get("content-type");
+                        String resourceType = response.request().resourceType();
+
+                        boolean isSuccessful = status >= 200 && status < 300;
+                        boolean isJson = contentType != null && contentType.toLowerCase().contains("application/json");
+                        boolean isApiCall = "xhr".equals(resourceType) || "fetch".equals(resourceType);
+
+                        if (isSuccessful && isJson && isApiCall) {
                             log.debug("Processing response from: {}", url);
-                            String responseBody = response.text();
-                            JsonNode jsonNode = objectMapper.readTree(responseBody);
-                            List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
-                            events.addAll(parsedEvents);
-                        } catch (Exception e) {
-                            log.error("Error processing response: {}", e.getMessage(), e);
+                            try {
+                                String responseBody = response.text();
+                                JsonNode jsonNode = objectMapper.readTree(responseBody);
+                                List<BettingEvent> parsedEvents = parseEventsFromJson(jsonNode, matchId);
+                                events.addAll(parsedEvents);
+                            } catch (Exception e) {
+                                // Avoid logging full stack traces for noisy responses
+                                log.warn("Error parsing response from {}: {}", url, e.getMessage());
+                            }
+                        } else {
+                            log.debug(
+                                    "Skipping response from {} (status: {}, content-type: {}, type: {})",
+                                    url, status, contentType, resourceType);
                         }
                     }
                 });
