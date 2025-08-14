@@ -6,6 +6,7 @@ import com.example.demo.model.BettingMarket;
 import com.example.demo.model.BettingSelection;
 import com.example.demo.util.UserAgentRotator;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.LoadState;
@@ -293,68 +294,98 @@ public class BetanoScraperService {
         List<BettingEvent> events = new ArrayList<>();
 
         try {
+            // Betano responses may return a top-level "events" array or a
+            // "fixtures" array containing an "event" object for metadata.
+            List<JsonNode> eventNodes = new ArrayList<>();
+
             if (jsonNode.has("events") && jsonNode.get("events").isArray()) {
-                JsonNode eventsNode = jsonNode.get("events");
-
-                for (JsonNode eventNode : eventsNode) {
-                    // Use values inside the JSON to determine if this event matches the requested matchId
-                    String eventId = eventNode.path("id").asText(null);
-                    String urlSegment = eventNode.path("url").asText(null);
-
-                    if (matchId != null && !matchId.isBlank()) {
-                        boolean matchesId = eventId != null && matchId.equals(eventId);
-                        boolean matchesUrl = urlSegment != null && urlSegment.contains(matchId);
-                        if (!matchesId && !matchesUrl) {
-                            // Skip events that do not correspond to the requested match
-                            continue;
-                        }
+                jsonNode.get("events").forEach(eventNodes::add);
+            } else if (jsonNode.has("fixtures") && jsonNode.get("fixtures").isArray()) {
+                for (JsonNode fixture : jsonNode.get("fixtures")) {
+                    // Each fixture may nest the actual event under an "event" key
+                    // while the markets remain at the fixture level.
+                    JsonNode eventNode = fixture.has("event") ? fixture.get("event") : fixture;
+                    // Attach markets node so downstream parsing can treat it uniformly
+                    if (eventNode instanceof ObjectNode && !eventNode.has("markets") && fixture.has("markets")) {
+                        ((ObjectNode) eventNode).set("markets", fixture.get("markets"));
                     }
-
-                    String matchName = eventNode.path("name").asText();
-                    String startTimeStr = eventNode.path("startTime").asText();
-                    LocalDateTime startTime = parseDateTime(startTimeStr);
-
-                    List<BettingMarket> markets = new ArrayList<>();
-
-                    if (eventNode.has("markets") && eventNode.get("markets").isArray()) {
-                        JsonNode marketsNode = eventNode.get("markets");
-
-                        for (JsonNode marketNode : marketsNode) {
-                            String marketId = marketNode.path("id").asText();
-                            String marketName = marketNode.path("name").asText();
-                            List<BettingSelection> selections = new ArrayList<>();
-
-                            if (marketNode.has("selections") && marketNode.get("selections").isArray()) {
-                                JsonNode selectionsNode = marketNode.get("selections");
-
-                                for (JsonNode selectionNode : selectionsNode) {
-                                    String selectionId = selectionNode.path("id").asText();
-                                    String selectionName = selectionNode.path("name").asText();
-                                    double odds = selectionNode.path("odds").asDouble();
-
-                                    selections.add(BettingSelection.builder()
-                                            .selectionId(selectionId)
-                                            .selectionName(selectionName)
-                                            .odds(odds)
-                                            .build());
-                                }
-                            }
-
-                            markets.add(BettingMarket.builder()
-                                    .marketId(marketId)
-                                    .marketType(marketName)
-                                    .selections(selections)
-                                    .build());
-                        }
-                    }
-
-                    events.add(BettingEvent.builder()
-                            .eventId(eventId)
-                            .matchName(matchName)
-                            .startTime(startTime)
-                            .markets(markets)
-                            .build());
+                    eventNodes.add(eventNode);
                 }
+            }
+
+            for (JsonNode eventNode : eventNodes) {
+                String eventId = eventNode.path("id").asText(null);
+                String urlSegment = eventNode.path("url").asText(null);
+
+                if (matchId != null && !matchId.isBlank()) {
+                    boolean matchesId = eventId != null && matchId.equals(eventId);
+                    boolean matchesUrl = urlSegment != null && urlSegment.contains(matchId);
+                    if (!matchesId && !matchesUrl) {
+                        continue;
+                    }
+                }
+
+                String matchName = eventNode.path("name").asText();
+                String startTimeStr = eventNode.path("startTime").asText();
+                LocalDateTime startTime = parseDateTime(startTimeStr);
+
+                List<BettingMarket> markets = new ArrayList<>();
+                JsonNode marketsNode = eventNode.path("markets");
+                if (marketsNode.isArray()) {
+                    for (JsonNode marketNode : marketsNode) {
+                        String marketId = marketNode.path("id").asText();
+                        String marketName = marketNode.path("name").asText();
+
+                        List<BettingSelection> selections = new ArrayList<>();
+                        JsonNode selectionsNode = marketNode.path("selections");
+                        if (!selectionsNode.isArray()) {
+                            selectionsNode = marketNode.path("outcomes");
+                        }
+
+                        if (selectionsNode.isArray()) {
+                            for (JsonNode selectionNode : selectionsNode) {
+                                String selectionId = selectionNode.path("id").asText();
+                                String selectionName = selectionNode.path("name").asText();
+
+                                double odds = 0.0;
+                                if (selectionNode.has("odds")) {
+                                    JsonNode oddsNode = selectionNode.get("odds");
+                                    if (oddsNode.isNumber()) {
+                                        odds = oddsNode.asDouble();
+                                    } else if (oddsNode.has("decimal")) {
+                                        odds = oddsNode.get("decimal").asDouble();
+                                    }
+                                } else if (selectionNode.has("price")) {
+                                    JsonNode priceNode = selectionNode.get("price");
+                                    if (priceNode.isNumber()) {
+                                        odds = priceNode.asDouble();
+                                    } else if (priceNode.has("decimal")) {
+                                        odds = priceNode.get("decimal").asDouble();
+                                    }
+                                }
+
+                                selections.add(BettingSelection.builder()
+                                        .selectionId(selectionId)
+                                        .selectionName(selectionName)
+                                        .odds(odds)
+                                        .build());
+                            }
+                        }
+
+                        markets.add(BettingMarket.builder()
+                                .marketId(marketId)
+                                .marketType(marketName)
+                                .selections(selections)
+                                .build());
+                    }
+                }
+
+                events.add(BettingEvent.builder()
+                        .eventId(eventId)
+                        .matchName(matchName)
+                        .startTime(startTime)
+                        .markets(markets)
+                        .build());
             }
         } catch (Exception e) {
             log.error("Error parsing JSON response: {}", e.getMessage(), e);
