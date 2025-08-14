@@ -39,7 +39,7 @@ public class EfbetScraperService {
     private final ObjectMapper objectMapper;
     private final UserAgentRotator userAgentRotator;
 
-    private static final String EFBET_URL = "https://www.efbet.com/bg/sports";
+    private static final String EFBET_URL = "https://www.efbet.com/bg";
     private static final int MAX_RETRIES = 3;
     private static final int RETRY_DELAY_MS = 5000;
 

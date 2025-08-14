@@ -30,7 +30,7 @@ public class BetanoScraperService {
     private final ObjectMapper objectMapper;
     private final UserAgentRotator userAgentRotator;
 
-    private static final String BETANO_URL = "https://www.betano.bg/sports";
+    private static final String BETANO_URL = "https://www.betano.bg";
     private static final int MAX_RETRIES = 3;
     private static final int RETRY_DELAY_MS = 5000;
 
